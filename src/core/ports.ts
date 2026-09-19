@@ -1,11 +1,19 @@
 import type { ProjectSnapshot, SessionRecord } from './model/session.js';
 
 /**
+ * Called by `create` with the other sessions recorded for the same project root.
+ * Throws to veto the creation.
+ */
+export type CreateGuard = (sameProject: SessionRecord[]) => void;
+
+/**
  * Persistence port. Implementations must store the whole record atomically and
- * reject a save whose `expectedRevision` is stale (error code CONFLICT).
+ * reject a save whose `expectedRevision` is stale (error code CONFLICT), also
+ * across processes. `create` must run `guard` and insert atomically with respect
+ * to other creates for the same project root.
  */
 export interface SessionRepository {
-  create(record: SessionRecord): Promise<void>;
+  create(record: SessionRecord, guard?: CreateGuard): Promise<void>;
   load(id: string): Promise<SessionRecord | undefined>;
   /** Persists `record` as revision `expectedRevision + 1` and updates `record.revision`. */
   save(record: SessionRecord, expectedRevision: number): Promise<void>;

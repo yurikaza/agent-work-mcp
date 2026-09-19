@@ -15,7 +15,7 @@ conventions to follow.
 | MCP SDK | `@modelcontextprotocol/server` 2.x | Stable v2 line implementing MCP spec `2026-07-28`. `serveStdio` also serves 2025-era clients. |
 | Validation | `zod` v4 | The SDK's schema dialect; also usable by a future CLI without MCP. |
 | Tests | `vitest` | Fast, ESM-native. |
-| Persistence | JSON file per session, atomic rename, revision check | Local-first, no backend, trivially replaceable behind a port. |
+| Persistence | JSON revision files per session, published by hard link (atomic compare-and-swap) | Local-first, no backend, safe across processes, replaceable behind a port. |
 | License | MIT | Default for a small open-source developer tool. |
 
 ## MCP conventions applied (spec 2026-07-28)
@@ -24,11 +24,13 @@ conventions to follow.
   `sessionId` handle returned by `start_session` and passed to every other tool.
 - Tool names: `snake_case`, ASCII, unique, deterministic order.
 - Every tool has a zod `inputSchema` and `outputSchema`; results return
-  `structuredContent` plus the serialized JSON as a text block.
+  `structuredContent` plus a text block: serialized JSON, or Markdown for the
+  handoff, the report and `stop_session`.
 - Business-rule failures return `isError: true` with an actionable message, not
   protocol errors.
-- Annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
-  `openWorldHint: false`) on every tool.
+- Annotations on every tool: `openWorldHint: false` everywhere;
+  `readOnlyHint: true` on read tools; `readOnlyHint: false`,
+  `destructiveHint`, `idempotentHint: false` on write tools.
 - Server-level `instructions` carry the OUTSIDE_MODE / DESK_MODE behavioral contract.
 
 ## Layers
@@ -41,8 +43,9 @@ src/mcp        tool registration only: schema -> orchestrator call -> result
 src/cli.ts     stdio entry point
 ```
 
-`core` imports nothing from `adapters` or `mcp`. `mcp` imports `core` only
-through the orchestrator and contract schemas.
+`core` imports nothing from `adapters` or `mcp`. `mcp` uses the orchestrator,
+the contract schemas, `DomainError` (error mapping) and the operating contract
+text.
 
 ## Build order
 

@@ -26,14 +26,14 @@ one model or provider.
 
 | Rule | How |
 |---|---|
-| One finished task never ends the run | `report_work` always answers "call `next_work`"; only `next_work` → `stop` ends a run. |
+| One finished task never ends the run | `report_work` never halts a session and tells the agent to call `next_work`; only `next_work` → `stop` ends a run. |
 | The budget is for the session, not per task | A 4-hour unit may use 4 hours of a 5-hour budget; a 20-minute unit takes 20 minutes and the next work is picked. |
 | Never invent work to use up budget | Units added after the initial plan need a rationale and are listed in the report. Unused budget is reported as a normal outcome. |
-| Never invent decisions | `record_decision` is refused while an OUTSIDE run is active. |
+| Never invent decisions | `record_decision`, removing a decision gate, and cancelling decision-gated work are refused while an OUTSIDE run is active. |
 | Decisions don't stop independent work | A decision gates only its affected units and their dependents. |
 | Parallelism must be earned | Subagents only for isolated units (disjoint `touches`/workstreams) whose elapsed-time savings beat agent + integration overhead. |
-| Smaller verified change over speculation | `completed` needs validation evidence; a session-level integration validation runs before any halt. |
-| Survive interruption | State is one JSON file per session with atomic writes; `resume_session` recovers in-flight units and charges budget only up to the last activity. |
+| Smaller verified change over speculation | `completed` needs validation evidence; a session-level integration validation runs before halting with unvalidated work (a failed validation halts as `blocked` for a human). |
+| Survive interruption | Session state is written as immutable revision files with an atomic compare-and-swap that holds across processes. Recovering a crashed run with `pause_session`, `stop_session` or `resume_session` doesn't charge the silent gap, and `resume_session` recovers in-flight units from their checkpoints. |
 
 ## Quick start (Claude Code)
 
@@ -51,7 +51,8 @@ Register it in the project you want to work on (run inside that project):
 claude mcp add agent-work --scope project -- node /absolute/path/to/agent-work-mcp/dist/cli.js
 ```
 
-Session state is stored in `<project>/.agent-work/`, which ignores itself in git.
+Session state is stored in `<project root>/.agent-work/`, which ignores itself in git. The project root is the
+server's working directory unless `AGENT_WORK_PROJECT_ROOT` is set (or `projectRoot` is passed to `start_session`).
 
 Then, before you leave:
 
@@ -137,9 +138,10 @@ npm run typecheck && npm run build
 ```
 
 Tests cover the state machine, work graph, execution policy, budget, the full
-OUTSIDE and DESK lifecycles, decision behavior, persistence across a simulated
-restart, the MCP surface over an in-memory transport, and the built binary over
-stdio.
+OUTSIDE and DESK lifecycles, decision behavior, interruption and resume,
+persistence across a simulated restart and concurrent writers, lifecycle
+invariants under random operation sequences, the MCP surface over an in-memory
+transport, and the built binary over stdio.
 
 ## Roadmap
 

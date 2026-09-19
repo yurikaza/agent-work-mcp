@@ -34,12 +34,16 @@ Server-managed fields: `status`, `attempts`, `claim`, `checkpoint`, `blocker`,
 - a `decisionIds` entry names an unknown decision,
 - the result has a cycle (the error names the cycle path),
 - it modifies a `done` unit or cancels one,
+- it removes an **open** decision id from a unit's `decisionIds` (only
+  `record_decision` releases a decision),
+- it cancels a unit that waits on an open decision while an OUTSIDE run is
+  active (`DECISION_REQUIRES_HUMAN`),
 - it declares `kind: validation`,
 - a unit added after the initial plan has no `rationale`.
 
-Upserting an existing non-terminal unit merges fields. Status is never set
-through the graph; it changes only through `next_work`, `report_work`,
-`cancel`, and `reopen`.
+Upserting an existing non-terminal unit merges fields; a changed `dependsOn` is
+recorded in the unit's notes. Status is never set through the graph; it changes
+only through `next_work`, `report_work`, `cancel`, and `reopen`.
 
 ## Derived readiness
 
@@ -100,8 +104,13 @@ to `subagent` executors with `isolation: worktree`. The main agent integrates
 subagent output, reports each unit, and owns final validation.
 
 When units are already in flight, one additional unit may be dispatched to the
-main agent if it is isolated from everything in flight; otherwise the answer is
-`wait`.
+main agent if the main agent holds no unit, fewer than `maxParallel` units are
+in flight, and the unit is isolated from everything in flight; otherwise the
+answer is `wait`. The main agent never holds more than one unit.
+
+The policy's inputs are the ready units, the in-flight units, the mode and the
+policy constants. Remaining budget is not an input: more budget never produces
+more parallelism. Budget only filters which units may start at all.
 
 ## Validation units
 
@@ -116,6 +125,9 @@ session is `validating` while it runs.
   agent adds run first (validation is always scheduled last), then validation
   re-runs and extends its coverage. After `maxAttempts` (default 3) the unit
   fails and the session halts as `blocked`.
+- Blocked or failed → no replacement validation unit is ever created. The
+  session halts as `blocked`; a human fixes the cause and reopens the unit.
+- Validation units cannot be gated by decisions, cancelled, or edited.
 
 `investigation` units produce knowledge, not code, and do not require
 integration validation.

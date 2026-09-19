@@ -4,9 +4,9 @@
 
 | State | Family | Meaning | Budget clock (outside) |
 |---|---|---|---|
-| `idle` | initial | Session record exists, work has not started. | stopped |
+| `idle` | initial | Initial state of a new record. `start_session` moves it to `analyzing` before the first save, so `idle` is never persisted. | stopped |
 | `analyzing` | active | Agent is inspecting repo and docs to build the work graph. | running |
-| `planning` | active | Graph exists; orchestrator is re-evaluating what is executable. Entered after every graph update and every completion. | running |
+| `planning` | active | Graph exists; orchestrator is re-evaluating what is executable. Entered after a graph update or a report when nothing is left in flight. | running |
 | `running` | active | At least one unit is claimed and in flight. | running |
 | `validating` | active | The session-level validation unit is in flight. | running |
 | `waiting_for_human` | halted | No executable work; remaining work is gated by at least one open decision. | stopped |
@@ -26,7 +26,8 @@ Families drive behavior:
 ## Transition table
 
 Enforced by `assertTransition` in `core/model/state-machine.ts`. Any transition
-not listed throws `INVALID_TRANSITION`. Self-transitions are no-ops.
+not listed throws `INVALID_TRANSITION`. Self-transitions are always allowed;
+they change nothing but may update the recorded reason.
 
 | From | To |
 |---|---|
@@ -49,25 +50,32 @@ human records a decision that makes work executable again. The session does
 ## How the next state is chosen
 
 Explicit commands (`start`, `pause`, `resume`, `stop`) move the state directly.
-Everything else goes through one pure evaluation (`evaluate` in the
-orchestrator) that inspects the graph, budget, and policy:
+Everything else goes through one pure evaluation (`evaluate` in
+`core/evaluate.ts`) that inspects the graph, budget, and policy:
 
 ```
-if graph was never submitted            → analyzing   (action: plan)
+if graph was never submitted
+   and budget exhausted (outside)       → resumable   (stop: budget_exhausted)
+   otherwise                            → analyzing   (action: plan)
 if budget exhausted (outside)
    and units in flight                  → running     (action: wait — finish or checkpoint)
-   and unvalidated completed task work  → validating  (validation is always allowed as wrap-up)
+   and validation needed, first attempt → validating  (one wrap-up attempt past budget)
    and executable work remains          → resumable   (stop: budget_exhausted)
    otherwise                            → classify halt (below)
 if executable units fit the budget      → running     (action: execute)
 if units in flight                      → running     (action: wait)
-if completed task work is unvalidated   → validating  (action: execute validation unit)
+if validation needed                    → validating  (action: execute validation unit)
 if executable units exist but none fit  → resumable   (stop: budget_insufficient)
 classify halt:
    no remaining units                   → completed
    any remaining unit gated by decision → waiting_for_human
    otherwise                            → blocked
 ```
+
+"Validation needed" means completed task units lack a passing validation **and**
+no validation unit is `failed` or `blocked`. A stuck validation unit is remaining
+work with a `failure:`/`blocker:` root cause, so the session halts as `blocked`
+until a human reopens it; the orchestrator never spawns a replacement.
 
 "Remaining" means units with status `pending`, `blocked`, or `failed`.
 
@@ -96,7 +104,10 @@ Readiness is derived, never stored: `ready`, `waiting_on_dependencies`,
   or it has no estimate and `remaining − reserve ≥ minStartMinutes`.
   Defaults: `reserve = 10`, `tolerance = 0.25`, `minStartMinutes = 5`.
 - The reserve exists so the session can always run integration validation
-  before halting. Validation is never refused for budget.
+  before halting. Past the budget, exactly one wrap-up validation attempt is
+  allowed; a retry after a failure is not.
+- Analysis is budgeted too: an OUTSIDE session still `analyzing` when the
+  budget runs out halts as `resumable`.
 - Remaining budget is never a reason to create work. When nothing meaningful is
   executable the session halts and the report states the unused budget as a
   normal outcome.
@@ -110,15 +121,27 @@ A session in an active state is **stale** when
 `now − lastActivityAt > max(staleAfterMinutes, 1.5 × largest in-flight estimate)`
 (`staleAfterMinutes` defaults to 60). Views expose `liveness: active | stale | idle`.
 
-`resume_session` on a stale active session (or with `takeover: true`) recovers:
+Silent time is charged by default. Only the explicit recovery commands treat a
+stale gap as an interruption: `pause_session`, `stop_session` and
+`resume_session` close the run (`interrupted`) and the budget clock at
+`lastActivityAt`, so the gap is not charged. Any other call after a silence
+(`next_work`, `report_work`, `request_decision`, `update_work_graph`) is, as far
+as the server can tell, the agent carrying on, and the whole gap counts.
+Overcharging a dead agent only makes the session stop early; undercharging real
+work would break the autonomy bound. To recover a crashed run, start with one of
+the recovery commands.
 
-1. budget consumption is closed at `lastActivityAt`, not at now,
-2. in-flight units return to `pending` with their last checkpoint preserved,
-3. the run is recorded as ended with `interrupted`,
-4. the session re-enters `planning` (or `analyzing` if no graph).
+- `pause_session` keeps in-flight claims; resuming from `paused` returns to
+  `running` with them.
+- `stop_session` releases in-flight units with their checkpoints.
+- `resume_session` on a stale active session (or with `takeover: true`)
+  releases in-flight units to `pending` with their last checkpoint and
+  re-enters `planning` (or `analyzing` if no graph) in a new run labelled with
+  the resumed mode.
 
 ## Persistence
 
 `SessionRecord` (see `core/model/session.ts`) is the entire aggregate: phase,
 budget, units, decisions, runs, dispatch history, event log, handoff notes.
-`schemaVersion` guards future migrations. `revision` guards concurrent writers.
+`schemaVersion` guards future migrations. `revision` guards concurrent writers
+(see [architecture.md](architecture.md#concurrency-and-durability)).

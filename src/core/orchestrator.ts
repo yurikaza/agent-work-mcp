@@ -103,21 +103,11 @@ export class Orchestrator {
   // ─── lifecycle ─────────────────────────────────────────────────────────────
 
   async startSession(input: StartSessionInput): Promise<StartSessionResult> {
-    const now = this.clock.now();
     if (input.mode === 'outside' && !input.budgetMinutes) {
       fail('BUDGET_REQUIRED', 'OUTSIDE_MODE needs budgetMinutes: the total autonomous wall-clock budget for the session.');
     }
     const root = resolve(input.projectRoot ?? this.defaultRoot);
-    const existing = (await this.repo.list()).filter((s) => s.projectRoot === root && !isTerminal(s.state));
-    const running = existing.find((s) => isActive(s.state) && liveness(s, now, this.policy) === 'active');
-    if (running) {
-      fail(
-        'SESSION_CONFLICT',
-        `Session ${running.id} is actively ${running.state} on this project. Pause or stop it first, ` +
-          'or resume it instead of starting a new one.',
-      );
-    }
-
+    const now = this.clock.now();
     const iso = now.toISOString();
     const s: SessionRecord = {
       schemaVersion: 1,
@@ -150,7 +140,21 @@ export class Orchestrator {
     logEvent(s, now, 'created', `Session created in ${input.mode} mode: ${input.goal}`);
     transition(s, 'analyzing', 'session started; analyzing the project', now);
     s.snapshot = await this.snapshot(root);
-    await this.repo.create(s);
+
+    // The repository runs this check and the insert atomically, across processes too:
+    // two autonomous runs must never work the same project at once.
+    let existing: SessionRecord[] = [];
+    await this.repo.create(s, (sameProject) => {
+      existing = sameProject.filter((x) => !isTerminal(x.state));
+      const running = existing.find((x) => isActive(x.state) && liveness(x, now, this.policy) === 'active');
+      if (running) {
+        fail(
+          'SESSION_CONFLICT',
+          `Session ${running.id} is actively ${running.state} on this project. Pause or stop it first, ` +
+            'or resume it instead of starting a new one.',
+        );
+      }
+    });
 
     const docs = s.snapshot?.docs ?? [];
     return {
@@ -165,6 +169,7 @@ export class Orchestrator {
     return this.mutate(input.sessionId, async (s, now) => {
       if (!isActive(s.state)) fail('SESSION_NOT_ACTIVE', `Only an active session can be paused; this one is ${s.state}.`);
       s.handoffNotes.push(...(input.notes ?? []));
+      this.closeIfStale(s, now);
       transition(s, 'paused', input.reason?.trim() || 'paused', now);
       s.snapshot = await this.snapshot(s.projectRoot);
       return {
@@ -189,10 +194,8 @@ export class Orchestrator {
             `Session is ${s.state} (last activity ${mins}m ago). If the previous agent is gone, pass takeover: true.`,
           );
         }
-        // Interrupted: close the run and the budget at the last known activity, not now.
-        const at = new Date(Math.min(now.getTime(), Date.parse(s.lastActivityAt)));
-        stopClock(s.budget, at);
-        closeRun(s, at, 'interrupted');
+        // Stale or taken over: the silent gap is not charged; the transition below opens a new run.
+        this.closeAtLastActivity(s, now);
         for (const u of s.units.filter((x) => x.status === 'in_progress')) {
           releaseUnit(u, 'Released after interruption; resume from the checkpoint.');
           released.push(u.id);
@@ -238,6 +241,7 @@ export class Orchestrator {
     return this.mutate(input.sessionId, async (s, now) => {
       if (isTerminal(s.state)) fail('SESSION_TERMINAL', `Session is already ${s.state}.`);
       s.handoffNotes.push(...(input.notes ?? []));
+      this.closeIfStale(s, now);
       for (const u of s.units.filter((x) => x.status === 'in_progress')) {
         releaseUnit(u, `Released by stop_session: ${input.reason}`);
       }
@@ -281,6 +285,22 @@ export class Orchestrator {
           if (existing.status === 'done' || existing.status === 'cancelled') {
             fail('UNIT_IMMUTABLE', `Unit '${spec.id}' is ${existing.status}; add a new unit instead (or reopen a cancelled one).`);
           }
+          const removedGates = spec.decisionIds
+            ? existing.decisionIds.filter((d) => !spec.decisionIds!.includes(d) && isOpenDecision(s, d))
+            : [];
+          if (removedGates.length > 0) {
+            fail(
+              'INVALID_INPUT',
+              `Cannot remove open decision gate(s) ${removedGates.join(', ')} from '${spec.id}'. ` +
+                'Only a human releases a decision, via record_decision.',
+            );
+          }
+          if (spec.dependsOn && !sameMembers(spec.dependsOn, existing.dependsOn)) {
+            // Re-planning is allowed, but it must stay visible to whoever reads the handoff.
+            existing.notes.push(
+              `Dependencies changed in graph r${s.graphRevision + 1}: [${existing.dependsOn.join(', ')}] → [${[...new Set(spec.dependsOn)].join(', ')}]`,
+            );
+          }
           applyUnitSpec(existing, spec);
           updated.push(spec.id);
         } else {
@@ -304,6 +324,14 @@ export class Orchestrator {
         if (u.status === 'done') fail('UNIT_IMMUTABLE', `Unit '${c.id}' is done and cannot be cancelled.`);
         if (u.kind === 'validation') fail('UNIT_IMMUTABLE', 'Validation units cannot be cancelled.');
         if (u.status === 'cancelled') continue;
+        const gates = u.decisionIds.filter((d) => isOpenDecision(s, d));
+        if (gates.length > 0 && !canRecordDecisions(s)) {
+          fail(
+            'DECISION_REQUIRES_HUMAN',
+            `'${u.id}' waits on open decision(s) ${gates.join(', ')}. Cancelling it would decide the question; ` +
+              'leave it for the human and continue independent work.',
+          );
+        }
         u.status = 'cancelled';
         u.cancelReason = c.reason;
         u.claim = undefined;
@@ -326,6 +354,12 @@ export class Orchestrator {
 
       assertGraphValid(draft, s.decisions);
       s.units = draft;
+      for (const u of s.units) {
+        for (const id of u.decisionIds) {
+          const d = s.decisions.find((x) => x.id === id);
+          if (d && !d.affectedUnitIds.includes(u.id)) d.affectedUnitIds.push(u.id);
+        }
+      }
 
       if (input.projectContext) {
         const prev = s.projectContext;
@@ -347,15 +381,14 @@ export class Orchestrator {
         `Graph r${s.graphRevision}: +${added.length} ~${updated.length} -${cancelled.length} reopened ${reopened.length}`,
       );
 
-      if (!s.graphSubmitted) {
-        s.graphSubmitted = true;
-        if (s.state === 'analyzing') transition(s, 'planning', 'work graph submitted', now);
-      } else if (s.state === 'analyzing') {
-        transition(s, 'planning', 'work graph updated', now);
+      const first = !s.graphSubmitted;
+      s.graphSubmitted = true;
+      if (s.state === 'analyzing') {
+        transition(s, 'planning', first ? 'work graph submitted' : 'work graph updated', now);
       } else if (s.state === 'running' && !hasInFlight(s)) {
         transition(s, 'planning', 're-evaluating after graph update', now);
       } else {
-        this.reclassifyHalted(s, now);
+        this.reclassifyHalted(s, now, first);
       }
 
       return {
@@ -555,6 +588,9 @@ export class Orchestrator {
       for (const u of affected) {
         if (u.status === 'done' || u.status === 'cancelled') {
           fail('INVALID_INPUT', `Unit '${u.id}' is ${u.status}; a decision cannot gate it.`);
+        }
+        if (u.kind === 'validation') {
+          fail('INVALID_INPUT', `'${u.id}' is integration validation; gate the task units the question is about instead.`);
         }
       }
       const d: Decision = {
@@ -831,11 +867,37 @@ export class Orchestrator {
     return unit;
   }
 
-  /** After a human changes decisions or the graph, re-derive a halted session's state. */
-  private reclassifyHalted(s: SessionRecord, now: Date): void {
+  /**
+   * After a human changes decisions or the graph, re-derive a halted session's
+   * state. The existing reason (e.g. "budget exhausted") is kept when the state
+   * does not change, unless `refreshReason` is set.
+   */
+  private reclassifyHalted(s: SessionRecord, now: Date, refreshReason = false): void {
     if (!isHalted(s.state) || s.state === 'paused') return;
     const halt = classifyHalt(s);
-    if (halt.state !== s.state) transition(s, halt.state, halt.message, now);
+    if (halt.state !== s.state || refreshReason) transition(s, halt.state, halt.message, now);
+  }
+
+  /** Close the budget clock and the open run at the last recorded activity (the agent may have died long before now). */
+  private closeAtLastActivity(s: SessionRecord, now: Date): void {
+    const at = new Date(Math.min(now.getTime(), Date.parse(s.lastActivityAt)));
+    stopClock(s.budget, at);
+    closeRun(s, at, 'interrupted');
+  }
+
+  /**
+   * Interruption recovery for pause/stop: if the active session is stale, close
+   * its run and budget clock at the last activity so the silent gap is not
+   * charged. Only explicit recovery commands do this. Any other call after a
+   * silence is from a working agent as far as the server can tell, and is
+   * charged: overcharging a dead agent only stops the session early, while
+   * undercharging real work would break the autonomy bound. The caller's
+   * transition opens the next run.
+   */
+  private closeIfStale(s: SessionRecord, now: Date): void {
+    if (!isActive(s.state) || liveness(s, now, this.policy) !== 'stale') return;
+    this.closeAtLastActivity(s, now);
+    logEvent(s, now, 'interrupted', `No activity since ${s.lastActivityAt}; the silent gap is not charged.`);
   }
 
   private async snapshot(root: string): Promise<ProjectSnapshot | undefined> {
@@ -919,6 +981,16 @@ function findUnit(s: SessionRecord, id: string): WorkUnit {
 
 function assertNotTerminal(s: SessionRecord): void {
   if (isTerminal(s.state)) fail('SESSION_TERMINAL', `Session is ${s.state}; no further changes are accepted.`);
+}
+
+function sameMembers(a: readonly string[], b: readonly string[]): boolean {
+  const x = new Set(a);
+  const y = new Set(b);
+  return x.size === y.size && [...x].every((v) => y.has(v));
+}
+
+function isOpenDecision(s: SessionRecord, id: string): boolean {
+  return s.decisions.some((d) => d.id === id && d.status === 'open');
 }
 
 function canRecordDecisions(s: SessionRecord): boolean {

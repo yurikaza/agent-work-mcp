@@ -4,7 +4,8 @@
 
 ```
 start_session(mode: outside, goal, budgetMinutes)
-   │  idle → analyzing; returns sessionId, repo snapshot, operating contract
+   │  → analyzing; returns sessionId, repo snapshot, docs to read, analysis guidance
+   │  (the operating contract itself is in the server's MCP `instructions`)
    ▼
 analyze repository and docs (agent)
    │
@@ -14,7 +15,7 @@ update_work_graph(units, projectContext)
 ┌─► next_work ─────────────────────────────────────────────────────────┐
 │     action: execute  → do the units (direct or parallel)             │
 │     action: wait     → finish in-flight units                        │
-│     action: stop     → run is over; show the handoff, end the turn   │
+│     action: stop     → run is over; read get_handoff, end the turn   │
 │                                                                      │
 │   report_work(unitId, completed|failed|blocked|progress, …)          │
 │     → re-evaluated; state back to planning when nothing is in flight │
@@ -28,8 +29,9 @@ update_work_graph(units, projectContext)
 
 Rules the server enforces or states in every relevant response:
 
-- A completed unit never ends the run. `report_work` always answers with
-  "call `next_work`".
+- A reported unit never ends the run: `report_work` only ever moves the session
+  to `planning` (or leaves it where it is). Every outcome except `progress`
+  answers "call `next_work`"; `progress` answers "continue the unit".
 - A decision never ends the run while independent work exists.
 - The run ends only when `next_work` returns `stop`:
   - `budget_exhausted` — budget spent; executable work remains → `resumable`,
@@ -37,8 +39,16 @@ Rules the server enforces or states in every relevant response:
   - `waiting_for_human` — all remaining work is gated, at least one gate is a decision,
   - `blocked` — all remaining work is gated by blockers or failures,
   - `completed` — everything done and validated,
-  - `paused` / `stopped` / `not_active` — session not in an active state.
-- Before any halt with completed task work, a validation unit runs first.
+  - `paused` / `failed` / `not_active` — the session was not in an active state
+    when `next_work` was called (`not_active` covers `resumable`).
+- Before halting with unvalidated completed task work, a validation unit runs
+  first. Two exceptions: if a validation unit is already `failed` or `blocked`
+  the session halts as `blocked` (a human reopens it), and past the budget only
+  one wrap-up validation attempt is made.
+- Long units should send `report_work` `progress` at least hourly. Silent time
+  is always charged to the budget unless a human recovers the session with
+  `pause_session`, `stop_session` or `resume_session`, which close the run at
+  the last activity.
 - Remaining budget is never a reason to add work. Units added after the initial
   plan must carry a rationale and are listed in the report as mid-session scope.
 
@@ -66,8 +76,8 @@ Budget is not consumed in DESK_MODE and dispatch is always direct (one unit).
 
 | Command | From | Effect |
 |---|---|---|
-| `pause_session` | active | → `paused`. Budget clock stops. In-flight claims kept. Notes stored. |
-| `resume_session` | halted (not terminal), or stale/`takeover` active | Optional mode switch and budget top-up. Recovers interrupted in-flight units. → `planning` (or `analyzing` if no graph; or back to `running` from `paused` with claims intact). |
+| `pause_session` | active | → `paused`. Budget clock stops. In-flight claims kept (a resumed agent is reminded of the unit it holds). Notes stored. |
+| `resume_session` | halted (not terminal), or stale/`takeover` active | Optional mode switch and budget top-up. From a stale or taken-over active session, in-flight units are released with their checkpoints. → `planning` (or `analyzing` if no graph; or back to `running`/`validating` from `paused` with claims intact). |
 | `stop_session` | any non-terminal | Ends the current run. In-flight units released with checkpoints. Classified like a halt (`resumable` if work remains executable). `markFailed: true` → `failed` (terminal). Returns the report. |
 
 ## Handoff

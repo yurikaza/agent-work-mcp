@@ -1,5 +1,5 @@
 import type { DecisionView, HandoffView, UnitBrief } from './contracts.js';
-import { unvalidatedTaskUnits } from './evaluate.js';
+import { needsValidation, unvalidatedTaskUnits } from './evaluate.js';
 import { orderDecisionQueue } from './model/decisions.js';
 import type { ProjectSnapshot, SessionRecord } from './model/session.js';
 import type { Policy } from './policy/policy.js';
@@ -74,7 +74,7 @@ export function computeNextActions(
   for (const u of inFlight) {
     actions.push(`Continue in-flight ${u.id}${u.checkpoint ? ` from checkpoint: ${u.checkpoint}` : ''}`);
   }
-  const unvalidated = unvalidatedTaskUnits(s).length;
+  const unvalidated = needsValidation(s) ? unvalidatedTaskUnits(s).length : 0;
   if (ready.length > 0 || unvalidated > 0 || !s.graphSubmitted) {
     const what = !s.graphSubmitted
       ? 'finish analysis and submit the work graph'

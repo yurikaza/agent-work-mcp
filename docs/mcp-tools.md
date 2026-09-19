@@ -3,8 +3,8 @@
 16 high-level tools. Names are `snake_case`; every tool declares an
 `inputSchema`, an `outputSchema`, and annotations (`openWorldHint: false` on
 all; `readOnlyHint: true` on the seven read tools). Results carry
-`structuredContent` plus a text block (JSON, or Markdown for the handoff and
-report). Rule violations return `isError: true` with `CODE: message`, so the
+`structuredContent` plus a text block (JSON, or Markdown for `get_handoff`,
+`get_session_report` and `stop_session`). Rule violations return `isError: true` with `CODE: message`, so the
 model can read and correct them.
 
 MCP `2026-07-28` has no protocol-level session. Every tool except
@@ -61,13 +61,13 @@ modes (see `src/core/guidance.ts`).
 | `SESSION_ACTIVE` | Resume refused: the session looks alive. Use `takeover: true` if it is not. |
 | `SESSION_NOT_ACTIVE` | Pause refused: nothing is running. |
 | `SESSION_CONFLICT` | Another session is actively running on the same project. |
-| `CONFLICT` | Another process changed the session concurrently. Retry. |
+| `CONFLICT` | Another writer changed the session concurrently. Retry. |
 | `GRAPH_INVALID` | Bad id, unknown reference, self-dependency or cycle. Nothing was applied. |
 | `UNIT_NOT_CLAIMED` | Only `in_progress` units can be reported. |
 | `UNIT_IMMUTABLE` | Done units, validation units, or cancelled units via upsert. |
 | `VALIDATION_REQUIRED` | Completion without evidence. |
 | `RATIONALE_REQUIRED` | Unit added after the initial plan without a rationale. |
-| `DECISION_REQUIRES_HUMAN` | `record_decision` during an active OUTSIDE run. |
+| `DECISION_REQUIRES_HUMAN` | `record_decision`, or cancelling decision-gated work, during an active OUTSIDE run. |
 | `DECISION_NOT_OPEN` | Decision already resolved or withdrawn. |
 | `BUDGET_REQUIRED` | OUTSIDE session without `budgetMinutes`. |
 | `BUDGET_EXHAUSTED` | Resume in OUTSIDE mode with no budget left. |

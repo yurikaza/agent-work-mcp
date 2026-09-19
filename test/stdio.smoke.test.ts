@@ -40,8 +40,8 @@ describe('stdio binary', () => {
       });
       expect(started.isError).toBeFalsy();
       const sessionId = (started.structuredContent as { session: { sessionId: string } }).session.sessionId;
-      const files = await readdir(join(project, '.agent-work', 'sessions'));
-      expect(files).toEqual([`${sessionId}.json`]);
+      expect(await readdir(join(project, '.agent-work', 'sessions'))).toEqual([sessionId]);
+      expect(await readdir(join(project, '.agent-work', 'sessions', sessionId))).toEqual(['1.json']);
     } finally {
       await client.close();
     }

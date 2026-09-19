@@ -24,18 +24,41 @@ export const unvalidatedTaskUnits = (s: SessionRecord): WorkUnit[] =>
   s.units.filter((u) => u.kind === 'task' && u.status === 'done' && !u.validatedBy);
 
 /**
+ * A validation unit that failed permanently or was reported blocked. While one
+ * exists, integration cannot proceed and no new validation unit is created; a
+ * human reopens it (update_work_graph reopen) once the cause is fixed.
+ */
+export const stuckValidation = (s: SessionRecord): WorkUnit | undefined =>
+  s.units.find((u) => u.kind === 'validation' && (u.status === 'failed' || u.status === 'blocked'));
+
+/** Completed task work awaits integration validation that can actually run. */
+export const needsValidation = (s: SessionRecord): boolean =>
+  unvalidatedTaskUnits(s).length > 0 && !stuckValidation(s);
+
+/**
  * Decide what an active session does next. Pure: reads the record, never
  * mutates it. The orchestrator applies the result.
  */
 export function evaluate(s: SessionRecord, now: Date, policy: Policy): Evaluation {
-  if (!s.graphSubmitted) return { kind: 'plan' };
+  const outside = s.mode === 'outside';
+  const remaining = outside ? remainingMinutes(s.budget, now) : Number.POSITIVE_INFINITY;
+
+  if (!s.graphSubmitted) {
+    if (outside && remaining <= 0) {
+      return {
+        kind: 'halt',
+        state: 'resumable',
+        reason: 'budget_exhausted',
+        message: 'Budget exhausted during analysis; no work graph was submitted.',
+      };
+    }
+    return { kind: 'plan' };
+  }
 
   const g = new GraphIndex(s.units, s.decisions);
   const inFlight = g.inFlight();
   const readyTasks = g.ready().filter((u) => u.kind !== 'validation');
-  const unvalidated = unvalidatedTaskUnits(s);
-  const outside = s.mode === 'outside';
-  const remaining = outside ? remainingMinutes(s.budget, now) : Number.POSITIVE_INFINITY;
+  const covers = () => unvalidatedTaskUnits(s).map((u) => u.id);
 
   if (outside && remaining <= 0) {
     if (inFlight.length > 0) {
@@ -46,16 +69,13 @@ export function evaluate(s: SessionRecord, now: Date, policy: Policy): Evaluatio
           'report them with report_work, then call next_work.',
       };
     }
-    if (unvalidated.length > 0) return { kind: 'validate', covers: unvalidated.map((u) => u.id) };
-    if (readyTasks.length > 0) {
-      return {
-        kind: 'halt',
-        state: 'resumable',
-        reason: 'budget_exhausted',
-        message: `Budget exhausted with ${readyTasks.length} ready unit(s) remaining.`,
-      };
-    }
-    return { kind: 'halt', ...classifyHalt(s, g) };
+    // One wrap-up validation attempt is allowed past the budget; retries after a failure are not.
+    const retrying = s.units.some((u) => u.kind === 'validation' && u.status === 'pending' && u.attempts > 0);
+    if (needsValidation(s) && !retrying) return { kind: 'validate', covers: covers() };
+    const halt = classifyHalt(s, g);
+    return halt.state === 'resumable'
+      ? { kind: 'halt', state: 'resumable', reason: 'budget_exhausted', message: `Budget exhausted. ${halt.message}` }
+      : { kind: 'halt', ...halt };
   }
 
   const fitting = outside ? readyTasks.filter((u) => fitsBudget(u.estimateMinutes, remaining, policy)) : readyTasks;
@@ -67,7 +87,7 @@ export function evaluate(s: SessionRecord, now: Date, policy: Policy): Evaluatio
   if (inFlight.length > 0) {
     return { kind: 'wait', reason: `${inFlight.length} unit(s) in flight; finish and report them, then call next_work.` };
   }
-  if (unvalidated.length > 0) return { kind: 'validate', covers: unvalidated.map((u) => u.id) };
+  if (needsValidation(s)) return { kind: 'validate', covers: covers() };
   if (readyTasks.length > 0) {
     const smallest = Math.min(...readyTasks.map((u) => u.estimateMinutes ?? Number.POSITIVE_INFINITY));
     return {
@@ -91,7 +111,7 @@ export function classifyHalt(s: SessionRecord, g: GraphIndex = new GraphIndex(s.
     return { state: 'resumable', reason: 'not_active', message: 'Analysis not finished: no work graph submitted yet.' };
   }
   const ready = g.ready();
-  const unvalidated = unvalidatedTaskUnits(s);
+  const unvalidated = needsValidation(s) ? unvalidatedTaskUnits(s) : [];
   if (g.inFlight().length > 0 || ready.length > 0 || unvalidated.length > 0) {
     const parts = [
       ready.length ? `${ready.length} ready unit(s)` : '',

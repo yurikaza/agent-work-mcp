@@ -32,6 +32,21 @@ its instructions. The agent **records** decisions. It never answers them.
 4. Computes **independent work**: ready units outside the impact set.
 5. Returns both, plus a directive: continue with independent work if any.
 
+Units can also be gated later through `update_work_graph` (`decisionIds`);
+those units are added to the decision's `affectedUnitIds` so impact stays
+correct. Validation units cannot be gated.
+
+The agent cannot sidestep a decision through the graph:
+
+- an open decision id cannot be removed from a unit's `decisionIds`,
+- a unit that waits on an open decision cannot be cancelled while an OUTSIDE
+  run is active (`DECISION_REQUIRES_HUMAN`); cancelling it would answer the
+  question. A human can cancel it once the run has halted.
+
+Re-planning dependencies stays allowed: if a dependent unit turns out not to
+need the gated unit, removing that edge makes it independent work. Every
+dependency change is recorded in the unit's notes and shows in the handoff.
+
 It never blocks, never waits for an answer, and never ends the run by itself.
 The run halts as `waiting_for_human` only when evaluation finds that **all**
 remaining work is gated and at least one gate is a decision.
@@ -48,9 +63,10 @@ ended; whoever calls is at the desk). The caller must pass `decidedBy`.
 On resolution:
 
 1. `status = resolved`, resolution stored.
-2. The decision id is removed from gating (units keep a note:
-   `Decision dec-2 resolved: <choice> — <rationale>`), so the executing agent
-   sees the human's answer when it picks the unit up.
+2. The decision stops gating. Units keep the id in `decisionIds` as history
+   (only open decisions gate) and get a note
+   `Decision dec-2 resolved by <decidedBy>: <choice> — <rationale>`, so the
+   executing agent sees the human's answer when it picks the unit up.
 3. If the session is halted, it is re-classified. Work that became executable
    moves `waiting_for_human` → `resumable`. The session does not restart until
    `resume_session`.

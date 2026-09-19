@@ -10,7 +10,7 @@ export { allowedTransitions, assertTransition, familyOf, isActive, isHalted, isT
 export { GraphIndex, findCycle, type Readiness, type RootCause } from './core/model/work-graph.js';
 export { planExecution, type ExecutionPlan } from './core/policy/execution-policy.js';
 export { DEFAULT_POLICY, type Policy } from './core/policy/policy.js';
-export type { Clock, IdGenerator, ProjectInspector, SessionRepository } from './core/ports.js';
+export type { Clock, CreateGuard, IdGenerator, ProjectInspector, SessionRepository } from './core/ports.js';
 export { FileSessionRepository } from './adapters/persistence/file-repository.js';
 export { MemorySessionRepository } from './adapters/persistence/memory-repository.js';
 export { GitDocsProjectInspector } from './adapters/project/git-docs-inspector.js';

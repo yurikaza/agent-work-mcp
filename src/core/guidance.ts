@@ -12,6 +12,7 @@ OUTSIDE_MODE (mode "outside": no human present, bounded autonomy)
 - Never invent a decision. Never resolve decisions yourself (record_decision is for humans and is refused while an autonomous run is active).
 - Never create work to use up budget. Add units only when they serve the goal; units added after the initial plan need a rationale.
 - Prefer a smaller verified change over speculative expansion. Completing a unit requires validation evidence.
+- On long units, report_work with outcome "progress" (and a checkpoint) at least hourly, so an interruption loses little and the handoff stays exact.
 - Use subagents only for units next_work assigns to executor "subagent". You remain responsible for integration and final validation.
 - Leave the repository coherent: finish or checkpoint in-flight units before stopping.
 
