@@ -1,14 +1,17 @@
 {
   "name": "agent-work-mcp",
   "version": "0.1.0",
-  "description": "MCP server for agent work orchestration: bounded autonomous execution (OUTSIDE_MODE) and human-in-the-loop execution (DESK_MODE).",
+  "description": "MCP server that lets coding agents work autonomously within a session budget: dependency graph, human decision queue, required validation and exact handoff (OUTSIDE_MODE / DESK_MODE).",
   "keywords": [
     "mcp",
+    "mcp-server",
     "model-context-protocol",
-    "agents",
-    "orchestration",
+    "ai-agents",
+    "agent-orchestration",
+    "autonomous-agents",
+    "human-in-the-loop",
     "claude-code",
-    "autonomous"
+    "coding-agents"
   ],
   "license": "MIT",
   "author": "Yusuf Mirza Pıçakcı",
