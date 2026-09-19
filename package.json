@@ -1,0 +1,60 @@
+{
+  "name": "agent-work-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for agent work orchestration: bounded autonomous execution (OUTSIDE_MODE) and human-in-the-loop execution (DESK_MODE).",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "agents",
+    "orchestration",
+    "claude-code",
+    "autonomous"
+  ],
+  "license": "MIT",
+  "author": "Yusuf Mirza Pıçakcı",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yurikaza/agent-work-mcp.git"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "agent-work-mcp": "dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev": "tsx src/cli.ts",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build",
+    "postbuild": "node -e \"require('fs').chmodSync('dist/cli.js', 0o755)\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@types/node": "^24.13.6",
+    "tsx": "^4.23.13",
+    "typescript": "^6.0.3",
+    "vitest": "^5.0.1"
+  }
+}

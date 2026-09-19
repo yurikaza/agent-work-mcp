@@ -1,1 +1,8 @@
 .env
+node_modules/
+dist/
+coverage/
+.agent-work/
+*.log
+.DS_Store
+.vitest/

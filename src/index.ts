@@ -1,0 +1,18 @@
+export * from './core/contracts.js';
+export { DomainError, type ErrorCode } from './core/errors.js';
+export { classifyHalt, evaluate, type Evaluation } from './core/evaluate.js';
+export { OPERATING_CONTRACT } from './core/guidance.js';
+export { buildHandoff } from './core/handoff.js';
+export { Orchestrator, type OrchestratorOptions } from './core/orchestrator.js';
+export { buildReport } from './core/report.js';
+export type * from './core/model/session.js';
+export { allowedTransitions, assertTransition, familyOf, isActive, isHalted, isTerminal } from './core/model/state-machine.js';
+export { GraphIndex, findCycle, type Readiness, type RootCause } from './core/model/work-graph.js';
+export { planExecution, type ExecutionPlan } from './core/policy/execution-policy.js';
+export { DEFAULT_POLICY, type Policy } from './core/policy/policy.js';
+export type { Clock, IdGenerator, ProjectInspector, SessionRepository } from './core/ports.js';
+export { FileSessionRepository } from './adapters/persistence/file-repository.js';
+export { MemorySessionRepository } from './adapters/persistence/memory-repository.js';
+export { GitDocsProjectInspector } from './adapters/project/git-docs-inspector.js';
+export { createMcpServer } from './mcp/server.js';
+export { VERSION } from './version.js';
