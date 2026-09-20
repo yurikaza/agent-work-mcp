@@ -420,6 +420,28 @@ Every tool has an input and output schema and annotations. Rule violations come 
 readable tool errors (`CODE: message`) that the model can act on. The full reference,
 including error codes, is in [docs/mcp-tools.md](docs/mcp-tools.md).
 
+## Hosted (Streamable HTTP)
+
+`dist/http.js` serves the same 16 tools over Streamable HTTP for use from
+Claude Cloud sessions, routines, or any remote MCP client. It is the second
+entry point; stdio stays the local default.
+
+```bash
+AGENT_WORK_TOKEN=<long random secret> AGENT_WORK_STATE_DIR=/data PORT=8787 npm start
+curl http://localhost:8787/healthz
+```
+
+- `POST /mcp` — MCP endpoint. Requires `Authorization: Bearer $AGENT_WORK_TOKEN`
+  (or `AGENT_WORK_ALLOW_UNAUTHENTICATED=1`, never in production).
+- `GET /healthz` — liveness, no auth.
+- `AGENT_WORK_STATE_DIR` — where sessions are stored; mount a persistent volume
+  there. There is no project inspector in hosted mode: pass `projectContext`
+  to `update_work_graph`, and use a repo URL as `projectRoot`.
+
+`railway.json` describes a Railway service: Railpack build, `node dist/http.js`,
+health check on `/healthz`. Set `AGENT_WORK_TOKEN` and mount a volume at
+`/data` with `AGENT_WORK_STATE_DIR=/data`.
+
 ## Configuration and storage
 
 | Variable | Default | Meaning |
