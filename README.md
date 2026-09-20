@@ -431,7 +431,7 @@ AGENT_WORK_TOKEN=<long random secret> AGENT_WORK_STATE_DIR=/data PORT=8787 npm s
 curl http://localhost:8787/healthz
 ```
 
-- `POST /mcp` — MCP endpoint. Requires `Authorization: Bearer $AGENT_WORK_TOKEN`
+- `POST /mcp` — MCP endpoint. Requires `Authorization: Bearer <token>`
   (or `AGENT_WORK_ALLOW_UNAUTHENTICATED=1`, never in production).
 - `GET /healthz` — liveness, no auth.
 - `AGENT_WORK_STATE_DIR` — where sessions are stored; mount a persistent volume
@@ -442,12 +442,46 @@ curl http://localhost:8787/healthz
 health check on `/healthz`. Set `AGENT_WORK_TOKEN` and mount a volume at
 `/data` with `AGENT_WORK_STATE_DIR=/data`.
 
+### OAuth 2.1
+
+Some clients — claude.ai custom connectors among them — will not carry a static
+bearer token, so the hosted server also runs the smallest authorization server
+that satisfies the MCP authorization spec. It is the resource server *and* its
+own issuer; there is nothing else to deploy.
+
+| Route | What it does |
+|---|---|
+| `GET /.well-known/oauth-protected-resource[/mcp]` | RFC 9728 metadata: this server's resource id and issuer. |
+| `GET /.well-known/oauth-authorization-server` | RFC 8414 metadata: endpoints, `S256`, the `mcp` scope. |
+| `POST /register` | RFC 7591 dynamic client registration. Public clients only, no client secret. |
+| `GET`/`POST /authorize` | A one-field HTML form. The field is `AGENT_WORK_TOKEN`. |
+| `POST /token` | `authorization_code` (PKCE `S256` required) and `refresh_token` (rotating). |
+
+There is one resource owner — you — and one credential, the server secret. The
+`/authorize` form asks for exactly that, so "log in" means "paste the token you
+already have". The same secret still works as a static bearer on `/mcp`, which
+is what tests, `curl` and local clients use.
+
+Access tokens last 1 hour, refresh tokens 30 days, authorization codes 60
+seconds. Tokens and codes are stored under `<state dir>/auth/` as the SHA-256 of
+their value and never in plaintext, so a leaked state directory cannot be
+replayed. Refresh tokens rotate: a stolen one is worth at most one use.
+
+To attach it to claude.ai, add `https://<host>/mcp` as a custom connector and
+paste the server secret into the form that opens. Set `AGENT_WORK_PUBLIC_URL`
+in production: without it the issuer and resource identifiers are derived from
+the request's `Host`/`X-Forwarded-*` headers, which is right for local use but
+lets a spoofed `Host` shape the discovery documents.
+
 ## Configuration and storage
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `AGENT_WORK_PROJECT_ROOT` | the server's working directory | Default project root for new sessions. |
 | `AGENT_WORK_STATE_DIR` | `<project root>/.agent-work` | Where session state is stored. |
+| `AGENT_WORK_TOKEN` | — | Hosted only: bearer token for `/mcp`, and the secret the `/authorize` form asks for. |
+| `AGENT_WORK_PUBLIC_URL` | derived from the request | Hosted only: public origin used as the OAuth issuer and resource id. |
+| `PORT` | `8787` | Hosted only: port for `dist/http.js`. |
 
 The state directory writes its own `.gitignore`, so it never shows up in `git status`:
 
@@ -456,7 +490,8 @@ The state directory writes its own `.gitignore`, so it never shows up in `git st
 ├── .gitignore                 # "*"
 ├── sessions/<sessionId>/      # immutable revisions; the last 5 are kept
 │   └── <revision>.json
-└── projects/<hash>/<n>.json   # per-project start sequence (one active session per project)
+├── projects/<hash>/<n>.json   # per-project start sequence (one active session per project)
+└── auth/                      # hosted only: OAuth clients, codes and tokens (hashed)
 ```
 
 Each revision is published with an atomic hard link, so two processes can never both
